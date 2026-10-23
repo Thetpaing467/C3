@@ -1,0 +1,6 @@
+ffmpeg
+libraqm0
+fonts-dejavu-core
+fonts-noto-core
+fonts-noto-cjk
+fonts-sil-padauk
