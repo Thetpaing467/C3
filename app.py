@@ -129,7 +129,7 @@ DEFAULTS = {
     "sub_size": 7.0,
     "sub_pos": 90,
     "use_neon": True,
-    "neon_th": 10,
+    "neon_th": 3,
     "neon_speed": 0.4,
     "zoom": 1.0,
 }
@@ -564,13 +564,14 @@ def blend_overlay(fr, ov):
 
 
 # ====================================================================
-# Neon border
+# Neon border (arc-length ညီညီ၊ video aspect ratio အတိုင်း လိုက်လည်)
 # ====================================================================
 class Neon:
     BASE = np.array([12, 8, 10], np.float32)
     CYAN = np.array([255, 255, 0], np.float32)
     MAGENTA = np.array([110, 30, 255], np.float32)
     IDLE = 0.14
+    NBINS = 2048
 
     def __init__(self, W, H, th=10, speed=0.4, tail=0.5):
         self.W, self.H, self.speed, self.tail = W, H, speed, tail
@@ -581,27 +582,32 @@ class Neon:
         ys, xs = np.nonzero(ring)
         dt, db, dl, dr = ys, H - 1 - ys, xs, W - 1 - xs
         m = np.minimum.reduce([dt, db, dl, dr])
+        # perimeter position (pixel index) — monotonic around border
         S = np.where(m == dt, xs,
             np.where(m == dr, W + ys,
             np.where(m == db, 2 * W + H + (W - xs),
-                     2 * W + 2 * H - ys))).astype(np.int64)
+                     2 * W + 2 * H - ys))).astype(np.float64)
         self.ys, self.xs = ys, xs
-        self.Si = S % self.P
-        self.P_arr = np.arange(self.P, dtype=np.float32)
+        # normalize to 0..1 arc-fraction (aspect ratio မညီလည်း ညီညီလည်)
+        self.Sf = ((S % self.P) / float(self.P)).astype(np.float32)
+        # lookup table 0..1 (NBINS)
+        self.L = np.arange(self.NBINS, dtype=np.float32) / float(self.NBINS)
+        # precompute sample index
+        self.idx = np.clip((self.Sf * self.NBINS).astype(np.int32), 0, self.NBINS - 1)
 
     def _layer(self, h, color):
-        P = self.P
-        dist = (h - self.P_arr) % P
-        a = np.clip(1.0 - dist / (self.tail * P), 0, 1)
+        # h & L are in 0..1 arc-fraction
+        dist = (h - self.L) % 1.0
+        a = np.clip(1.0 - dist / self.tail, 0, 1)
         glow = self.IDLE + (1.0 - self.IDLE) * (a ** 0.55)
-        core = np.clip(1.0 - dist / (0.06 * P), 0, 1) ** 2
+        core = np.clip(1.0 - dist / 0.06, 0, 1) ** 2
         return color * glow[:, None] + 255.0 * 0.9 * core[:, None]
 
     def apply(self, fr, t):
-        head = (t * self.speed * self.P / 4.0) % self.P
-        c = self.BASE + self._layer(head, self.CYAN) + self._layer(head + self.P / 2, self.MAGENTA)
+        head = (t * self.speed) % 1.0
+        c = self.BASE + self._layer(head, self.CYAN) + self._layer(head + 0.5, self.MAGENTA)
         strip = np.clip(c, 0, 255).astype(np.uint8)
-        fr[self.ys, self.xs] = strip[self.Si]
+        fr[self.ys, self.xs] = strip[self.idx]
 
 
 def zoom_flip(fr, zoom, flip):
@@ -1433,15 +1439,9 @@ with st.expander("🎨 စာတန်း (PNG) + Neon", expanded=False):
     sub_size = c5.slider("စာအရွယ် (% of width)", 3.0, 12.0, step=0.5, key="sub_size")
     sub_pos = c6.slider("နေရာ (0=အပေါ် 100=အောက်)", 0, 100, step=1, key="sub_pos")
     use_neon = st.toggle("Neon border", key="use_neon")
-    if use_neon:
-        cn1, cn2 = st.columns(2)
-        neon_th = cn1.slider("Neon အထူ (px)", 2, 40, step=1, key="neon_th",
-                             help="ဘောင်အထူ။ 1080p မှာ 10~14 ကောင်းတယ်")
-        neon_speed = cn2.slider("Neon အလျင်း (speed)", 0.1, 3.0, step=0.1, key="neon_speed",
-                                help="အလင်းရောင် လှည့်ပတ်မှု အလျင်း")
-    else:
-        neon_th = st.session_state["neon_th"]
-        neon_speed = st.session_state["neon_speed"]
+    # ✅ Neon အထူ / Speed ကို ပုံသေ ထားတယ် (slider မပြ)
+    neon_th = 3
+    neon_speed = 0.4
     zoom = st.slider("Zoom", 1.0, 1.25, step=0.01, key="zoom")
     font_path = find_font_for(voice_lang)
     if not font_path:
